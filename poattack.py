@@ -4,6 +4,12 @@ def split_into_blocks(msg, l):
     while msg:
         yield msg[:l]
         msg = msg[l:]
+
+def cbc(ctx, iv):
+    decryptor = Cipher(algorithms.AES(base64.urlsafe_b64encode(os.urandom(16))), modes.CBC(iv)).decryptor()
+    
+    msg = decryptor.update(ctx) + decryptor.finalize()
+
     
 def po_attack_2blocks(po, ctx):
     """Given two blocks of cipher texts, it can recover the first block of
@@ -17,6 +23,14 @@ def po_attack_2blocks(po, ctx):
     c0, c1 = list(split_into_blocks(ctx, po.block_length))
     msg = ''
     # TODO: Implement padding oracle attack for 2 blocks of messages.
+    #decryption of first block
+    random_IV = os.urandom(16)
+    msg = xor(cbc(c0, random_IV),random_IV) 
+
+    #decryption of second block
+    msg += xor(cbc(c1, c0), c0) 
+
+
     return msg
 
 def po_attack(po, ctx):
