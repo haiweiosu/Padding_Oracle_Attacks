@@ -89,13 +89,61 @@ def po_attack(po, ctx):
     ctx_blocks = list(split_into_blocks(ctx, po.block_length))
     nblocks = len(ctx_blocks)
     # TODO: Implement padding oracle attack for arbitrary length message.
-    msg = ''
-    for i in range(nblocks - 1):
-        msg = po_attack_2blocks(po, ctx_blocks[i])
-    return msg
+    #case1: if nblocks is 2 then we directly call the po_attack2block function
+    if nblocks == 2:
+        return po_attack_2blocks(po, ctx)
+    #case2: if nblocks is more than 2 then we need to loop it
+    else:
+        temp = ''
+        msg = [''] *  ((nblocks-1)* po.block_length)
+        for block_index in range(nblocks-2):
+            padding_byte = 1
+            c0 = ctx_blocks[block_index]
+            c1 = ctx_blocks[block_index+1]
+            #we now try to get the plain text msg one byte at a time
+            for j in reversed(xrange(len(c1))):
+                new_iv = list(c0)
+                old_iv = list(c0)
 
+                message_index = (block_index * po.block_length) + j
 
-    
+                for k in xrange(j + 1, len(c0)):
+                    new_message_index =  (block_index * po.block_length) + k
+                    #reset the previous byte in c1
+                    new_iv[k] = chr(ord(old_iv[k]) ^ ord(msg[k]) ^ padding_byte)
+
+                #since we don't know which value is the correct one, we loop through all 256 possible
+                #values
+                for i in xrange(256):
+                    new_iv[j] = chr(ord(old_iv[j]) ^ i ^ padding_byte)
+
+                    IV2 = ''.join(new_iv)
+
+                    temp = IV2 + c1
+                    res = po.decrypt(temp)
+
+                    if res:
+                        msg[j] = chr(i)
+                        break
+                padding_byte += 1
+            # print block_index
+            temp = ''.join(msg)
+            # print temp
+        #when reading to the last two blocks, directly call po_attack2block
+        # if block_index == nblocks-3:
+        # _i = block_index*po.block_length
+        # c0 = ctx[_i: _i + po.block_length]
+        # c1 = ctx[_i+po.block_length:_i+2*po.block_length]
+        c0 = ctx_blocks[block_index+1]
+        c1 = ctx_blocks[block_index+2]
+        # print type(ctx[block_index:])
+        # print type(c0+c1)
+        # print ''.join(ctx[block_index:])
+        # print ctx[block_index:]
+        msg = po_attack_2blocks(po, c0+c1)
+        print temp + ''.join(msg)
+        return temp + ''.join(msg)
+
 ################################################################################
 ##### Tests
 ################################################################################
@@ -108,7 +156,7 @@ def test_po_attack_2blocks():
         assert po.test(msg), "Failed 'po_attack_2blocks' for msg of length={}".format(i)
 
 def test_po_attack():
-    for i in xrange(1000):
+    for i in xrange(33):
         po = PaddingOracle(msg_len=i)
         ctx = po.setup()
         msg = po_attack(po, ctx)
