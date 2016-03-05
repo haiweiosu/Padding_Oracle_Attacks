@@ -1,3 +1,9 @@
+"""
+CS-5830: Homework 2
+Padding Oracle Attack
+
+Daniel Speiser and Haiwei Su
+"""
 from paddingoracle import PaddingOracle, PaddingOracleServer, xor
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
@@ -10,7 +16,7 @@ def split_into_blocks(msg, l):
         yield msg[:l]
         msg = msg[l:]
 
-def po_attack_2blocks(po, ctx):
+def po_attack_2blocks(po, ctx, padding=True):
     """Given two blocks of cipher texts, it can recover the first block of
     the message.
     @po: an instance of padding oracle. 
@@ -21,62 +27,53 @@ def po_attack_2blocks(po, ctx):
         "cipher texts. Got {} block(s)!".format(len(ctx)/po.block_length)
     c0, c1 = list(split_into_blocks(ctx, po.block_length))
 
-    #initialize padding index
-    pad_index = 0
-
-    #here, we define our IV as c0
-    IV = list(c0)
-
-    #looping through the IV and change its byte once a time till decryption function
-    #return false
-    for i in xrange(len(IV)):
-        #We first start byte value for 01 then iterate 255 times to find the right one
-        if ord(IV[i]) < 255:
-            IV[i] = chr(ord(IV[i]) + 1)
-        else:
-            IV[i] = chr(1)
-
-        #We can create our own personalize IV
-        IV2 = "".join(IV)
-        #then we decrypt the message and check the boolean result
-        new_ctx = IV2 + c1
-        res = po.decrypt(new_ctx)
-
-        #If result is False then we know the length of padding and length of msg
-        if res is False:
-            pad_index = i
-            break
-
-    #initialize the padding byte
-    pad_byte = len(c1) - pad_index
-
+    #initialize padding index and byte
+    pad_idx, pad_byte = 16, 1
     #initialize the plain we want to get
-    msg = [''] * pad_index
+    msg = [''] * po.block_length
+    # if there's padding, we must determine where it begins
+    if padding:
+        for i in range(len(c0)): # loop through ciphertext
+            # increment current c0 index by 1 (modulo 255 so we deal with overflow issues) to find where padding begins
+            new_c0 = c0[:i] + chr((ord(c0[i]) + 1) % 256) + c0[i + 1:]
+            # if the decrypt fails, we know we've changed a padding value. Now we know where padding begins
+            if not po.decrypt(new_c0 + c1):
+                pad_idx, pad_byte = i, len(c0) - i # store padding index and byte
+                break # break
+    else: 
+    # otherwise handle possible special case where padding would return true, although there may be
+    # two possible options for a byte value (example is force last byte to 0x01, po returns true, but the 
+    # second to last byte could be 0x02, and we accidentally changed the last byte to 0x02 and returned true)
+    # There exists one edge case for each byte index.
+        for i in range(256):
+            # attempt to force first byte to 1
+            new_c0 = c0[:-1] + chr(ord(c0[-1]) ^ i ^ 1)
+            if po.decrypt(new_c0 + c1): # if returns true, check previous byte
+                previous_byte = chr(ord(c0[-2]) ^ 1) # flip byte and check
+                new_c0 = c0[:-2] + previous_byte + new_c0[-1]
+                if po.decrypt(new_c0 + c1):
+                    msg[-1] = chr(i) # set last index of msg array to this confirmed byte
+                    break
 
-    #we now try to get the plain text msg one byte at a time
-    for j in reversed(xrange(pad_index)):
-        actual_pad_length = len(c1) - j
+    # we now try to get the plain text msg one byte at a time
+    for j in reversed(xrange(pad_idx)):
+        pad_len = len(c1) - j # current length of pad 
         new_iv = list(c0)
         old_iv = list(c0)
-
+        # if the index is at a position of padding byte that has been used, we xor the 
+        # original with the current pad, otherwise we xor the index byte and current pad
         for k in xrange(j + 1, len(c0)):
-            if k >= pad_index:
-                new_iv[k] = chr(ord(old_iv[k]) ^ pad_byte ^ actual_pad_length)
+            if k >= pad_idx:
+                new_iv[k] = chr(ord(old_iv[k]) ^ pad_byte ^ pad_len)
             else:
-                new_iv[k] = chr(ord(old_iv[k]) ^ ord(msg[k]) ^ actual_pad_length)
-
-        #since we don't know which value is the correct one, we loop through all 256 possible
-        #values
+                new_iv[k] = chr(ord(old_iv[k]) ^ ord(msg[k]) ^ pad_len)
+        #since we don't know which value is the correct one, we loop through all 256 possible values
         for i in xrange(256):
-            new_iv[j] = chr(ord(old_iv[j]) ^ i ^ actual_pad_length)
-            IV2 = ''.join(new_iv)
-            temp = IV2+c1
-            res = po.decrypt(temp)
-
-            if res:
+            new_iv[j] = chr(ord(old_iv[j]) ^ i ^ pad_len)
+            IV = ''.join(new_iv)
+            if po.decrypt(IV + c1):
                 msg[j] = chr(i)
                 break
-    # print ''.join(msg)
     return ''.join(msg)
 
 def po_attack(po, ctx):
@@ -88,61 +85,14 @@ def po_attack(po, ctx):
     """
     ctx_blocks = list(split_into_blocks(ctx, po.block_length))
     nblocks = len(ctx_blocks)
-    # TODO: Implement padding oracle attack for arbitrary length message.
-    #case1: if nblocks is 2 then we directly call the po_attack2block function
-    if nblocks == 2:
-        return po_attack_2blocks(po, ctx)
-    #case2: if nblocks is more than 2 then we need to loop it
-    else:
-        temp = ''
-        msg = [''] *  ((nblocks-1)* po.block_length)
-        for block_index in range(nblocks-2):
-            padding_byte = 1
-            c0 = ctx_blocks[block_index]
-            c1 = ctx_blocks[block_index+1]
-            #we now try to get the plain text msg one byte at a time
-            for j in reversed(xrange(len(c1))):
-                new_iv = list(c0)
-                old_iv = list(c0)
-
-                message_index = (block_index * po.block_length) + j
-
-                for k in xrange(j + 1, len(c0)):
-                    new_message_index =  (block_index * po.block_length) + k
-                    #reset the previous byte in c1
-                    new_iv[k] = chr(ord(old_iv[k]) ^ ord(msg[k]) ^ padding_byte)
-
-                #since we don't know which value is the correct one, we loop through all 256 possible
-                #values
-                for i in xrange(256):
-                    new_iv[j] = chr(ord(old_iv[j]) ^ i ^ padding_byte)
-
-                    IV2 = ''.join(new_iv)
-
-                    temp = IV2 + c1
-                    res = po.decrypt(temp)
-
-                    if res:
-                        msg[j] = chr(i)
-                        break
-                padding_byte += 1
-            # print block_index
-            temp = ''.join(msg)
-            # print temp
-        #when reading to the last two blocks, directly call po_attack2block
-        # if block_index == nblocks-3:
-        # _i = block_index*po.block_length
-        # c0 = ctx[_i: _i + po.block_length]
-        # c1 = ctx[_i+po.block_length:_i+2*po.block_length]
-        c0 = ctx_blocks[block_index+1]
-        c1 = ctx_blocks[block_index+2]
-        # print type(ctx[block_index:])
-        # print type(c0+c1)
-        # print ''.join(ctx[block_index:])
-        # print ctx[block_index:]
-        msg = po_attack_2blocks(po, c0+c1)
-        print temp + ''.join(msg)
-        return temp + ''.join(msg)
+    # initialize empty msg array
+    msg = ['']
+    # attack 2 blocks at a time, up until the last 2 blocks (where we know the last has padding)
+    for i in range(nblocks - 2):
+        msg += po_attack_2blocks(po, ctx_blocks[i] + ctx_blocks[i + 1], padding=False)
+    # handle the case with padding (padding param is defaulted to true) and append result to msg
+    msg += po_attack_2blocks(po, ctx_blocks[-2] + ctx_blocks[-1])
+    return ''.join(msg)
 
 ################################################################################
 ##### Tests
@@ -153,22 +103,27 @@ def test_po_attack_2blocks():
         po = PaddingOracle(msg_len=i)
         ctx = po.setup()
         msg = po_attack_2blocks(po, ctx)
+        print "{0}: {1}".format(i, binascii.b2a_hex(msg))
         assert po.test(msg), "Failed 'po_attack_2blocks' for msg of length={}".format(i)
 
 def test_po_attack():
-    for i in xrange(33):
+    for i in xrange(1000):
         po = PaddingOracle(msg_len=i)
         ctx = po.setup()
         msg = po_attack(po, ctx)
+        if i > 1:
+            print "{0}: {1}".format(i, binascii.b2a_hex(msg))
+        else:
+            print "{0}: {1}".format(i, msg)
         assert po.test(msg), "Failed 'po_attack' for msg of length={}".format(i)
 
 def test_poserver_attack():
-    # You may want to put some print statement in the code to see the
-    # progress. This attack might 10.218.176.10take upto an hour to complete. 
-
     po = PaddingOracleServer()
     ctx = po.ciphertext()
     msg = po_attack(po, ctx)
     print msg
 
 test_po_attack()
+
+# Recovered plaintext from server-side po attack:
+# {"msg": "Congrats you have cracked a secret message!", "name": "Padding Oracle"}
